@@ -1,0 +1,12 @@
+build/
+dist/
+cmake-build-*/
+.conan/
+*.log
+*.tmp
+*.o
+*.a
+*.so
+*.exe
+.vscode/
+.idea/
