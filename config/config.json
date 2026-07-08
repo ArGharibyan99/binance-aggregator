@@ -1,0 +1,13 @@
+{
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "window_ms": 1000,
+  "flush_interval_ms": 1000,
+  "output_file": "market_stats.log",
+  "ws_host": "stream.binance.com",
+  "ws_port": "9443",
+  "reconnect": {
+    "initial_backoff_ms": 500,
+    "max_backoff_ms": 30000,
+    "jitter_ratio": 0.2
+  }
+}

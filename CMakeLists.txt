@@ -25,21 +25,37 @@ find_package(nlohmann_json REQUIRED)
 find_package(fmt REQUIRED)
 find_package(spdlog REQUIRED)
 
+add_library(agg_core
+    app/src/config/ConfigLoader.cpp
+)
+
+target_include_directories(agg_core
+    PUBLIC
+        app/include
+)
+
+target_link_libraries(agg_core
+    PUBLIC
+        nlohmann_json::nlohmann_json
+)
+
+target_compile_options(agg_core
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+)
+
 add_executable(binance_aggregator
     app/main.cpp
 )
 
-target_include_directories(binance_aggregator
-    PRIVATE
-        app/include
-)
-
 target_link_libraries(binance_aggregator
     PRIVATE
+        agg_core
         Boost::headers
         OpenSSL::SSL
         OpenSSL::Crypto
-        nlohmann_json::nlohmann_json
         fmt::fmt
         spdlog::spdlog
 )
@@ -57,12 +73,20 @@ if(BUILD_TESTING)
     find_package(GTest REQUIRED)
 
     add_executable(unit_tests
-        tests/unit/DummyTest.cpp
+        tests/unit/ConfigLoaderTest.cpp
     )
 
     target_link_libraries(unit_tests
         PRIVATE
+            agg_core
             GTest::gtest_main
+    )
+
+    target_compile_options(unit_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
     )
 
     include(GoogleTest)
