@@ -92,3 +92,15 @@ if(BUILD_TESTING)
     include(GoogleTest)
     gtest_discover_tests(unit_tests)
 endif()
+
+install(TARGETS binance_aggregator
+    RUNTIME DESTINATION bin
+)
+
+install(DIRECTORY config/
+    DESTINATION etc/binance-aggregator
+    FILES_MATCHING PATTERN "*.json"
+)
+
+include(cmake/docker.cmake)
+binance_aggregator_add_docker_targets()
