@@ -2,12 +2,13 @@
 
 ARG BUILD_TYPE=Release
 
-FROM ubuntu:24.04 AS build
+FROM ubuntu:24.04 AS test
 
 ARG BUILD_TYPE
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.local/bin:${PATH}"
+ENV CTEST_OUTPUT_ON_FAILURE=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -33,41 +34,14 @@ RUN cmake -S . -B build \
 
 RUN cmake --build build -j$(nproc)
 
-RUN ctest --test-dir build --output-on-failure
+RUN ctest \
+    --test-dir build \
+    --output-on-failure \
+    --verbose
 
 RUN cmake --install build --prefix /install
 
 
-FROM ubuntu:24.04 AS runtime
+FROM scratch AS artifact
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    libstdc++6 \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN useradd \
-    --system \
-    --create-home \
-    --home-dir /var/lib/binance-aggregator \
-    --shell /usr/sbin/nologin \
-    binance
-
-COPY --from=build /install /opt/binance-aggregator
-COPY config /etc/binance-aggregator
-
-RUN mkdir -p /var/lib/binance-aggregator && \
-    chown -R binance:binance \
-        /var/lib/binance-aggregator \
-        /etc/binance-aggregator \
-        /opt/binance-aggregator
-
-ENV PATH="/opt/binance-aggregator/bin:${PATH}"
-
-USER binance
-
-WORKDIR /var/lib/binance-aggregator
-
-ENTRYPOINT ["binance_aggregator"]
-CMD ["--config", "/etc/binance-aggregator/config.json"]
+COPY --from=test /install /

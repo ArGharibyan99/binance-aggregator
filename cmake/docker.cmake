@@ -2,47 +2,41 @@ function(binance_aggregator_add_docker_targets)
     find_program(DOCKER_EXECUTABLE docker)
 
     if(NOT DOCKER_EXECUTABLE)
-        message(WARNING "Docker was not found. Docker targets will not be available.")
+        message(STATUS "Docker executable not found. Docker wrapper targets will not be added.")
         return()
     endif()
 
-    if(NOT CMAKE_BUILD_TYPE)
-        set(DOCKER_BUILD_TYPE Release)
-    else()
+    if(CMAKE_BUILD_TYPE)
         set(DOCKER_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+    else()
+        set(DOCKER_BUILD_TYPE "Release")
     endif()
 
-    add_custom_target(docker_build_test
-        COMMAND "${DOCKER_EXECUTABLE}" build
-                --progress=plain
-                --target build
-                --build-arg BUILD_TYPE=${DOCKER_BUILD_TYPE}
-                -t binance_aggregator_build:${DOCKER_BUILD_TYPE}
-                -f "${CMAKE_SOURCE_DIR}/Dockerfile"
-                "${CMAKE_SOURCE_DIR}"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    set(DOCKER_TEST_IMAGE_NAME "binance_aggregator_test")
+    set(DOCKER_EXPORT_DIR "${CMAKE_SOURCE_DIR}/dist/docker")
+
+    add_custom_target(docker_test
+        COMMAND ${DOCKER_EXECUTABLE} build
+            --progress=plain
+            --target test
+            --build-arg BUILD_TYPE=${DOCKER_BUILD_TYPE}
+            -t ${DOCKER_TEST_IMAGE_NAME}:${DOCKER_BUILD_TYPE}
+            ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         USES_TERMINAL
-        COMMENT "Building and testing Binance Aggregator inside Docker"
+        COMMENT "Building Binance Aggregator and running tests inside Docker"
     )
 
-    add_custom_target(docker_image
-        COMMAND "${DOCKER_EXECUTABLE}" build
-                --progress=plain
-                --build-arg BUILD_TYPE=${DOCKER_BUILD_TYPE}
-                -t binance_aggregator:${DOCKER_BUILD_TYPE}
-                -f "${CMAKE_SOURCE_DIR}/Dockerfile"
-                "${CMAKE_SOURCE_DIR}"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    add_custom_target(docker_export_binary
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${DOCKER_EXPORT_DIR}
+        COMMAND ${DOCKER_EXECUTABLE} build
+            --progress=plain
+            --target artifact
+            --build-arg BUILD_TYPE=${DOCKER_BUILD_TYPE}
+            --output type=local,dest=${DOCKER_EXPORT_DIR}
+            ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         USES_TERMINAL
-        COMMENT "Building final Binance Aggregator runtime Docker image"
-    )
-
-    add_custom_target(docker_run
-        COMMAND "${DOCKER_EXECUTABLE}" run
-                --rm
-                binance_aggregator:${DOCKER_BUILD_TYPE}
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        USES_TERMINAL
-        COMMENT "Running Binance Aggregator Docker image"
+        COMMENT "Building, testing, installing, and exporting Binance Aggregator binary from Docker"
     )
 endfunction()

@@ -2,7 +2,7 @@
 
 C++ Linux service for collecting Binance public WebSocket market data and aggregating real-time trading statistics.
 
-The project is currently in the infrastructure/setup stage. The build system, dependency management, Docker build flow, host build flow, and initial configuration structure are prepared before implementing the Binance connection and aggregation logic.
+The project is currently in the infrastructure/setup stage. The build system, dependency management, Docker build/test flow, Docker binary export flow, host build flow, and configuration loading are prepared before implementing the Binance connection and aggregation logic.
 
 ## Current Status
 
@@ -13,10 +13,12 @@ Implemented so far:
 - CMake build system
 - Conan dependency management
 - Automatic Conan bootstrap from CMake
-- Basic executable target
-- Basic unit test target with GoogleTest
+- Core library target (agg_core) and executable target
+- Configuration loading and validation (ConfigLoader)
+- Unit tests with GoogleTest (config loading)
 - Runtime configuration file
-- Docker build/test/runtime image support
+- Docker build/test image support
+- Docker-built binary export support (dist/docker)
 - Host build instructions
 ```
 
@@ -30,6 +32,7 @@ binance-aggregator/
 ├── conanfile.txt
 ├── Dockerfile
 ├── README.md
+├── LICENSE
 ├── .dockerignore
 ├── .gitignore
 ├── cmake/
@@ -40,30 +43,36 @@ binance-aggregator/
 ├── app/
 │   ├── main.cpp
 │   ├── include/agg/
-│   │   ├── config/
-│   │   ├── model/
-│   │   ├── parse/
-│   │   ├── aggregation/
-│   │   ├── net/
-│   │   ├── output/
-│   │   ├── runtime/
-│   │   └── util/
+│   │   └── config/
+│   │       ├── Config.hpp
+│   │       └── ConfigLoader.hpp
 │   └── src/
-│       ├── config/
-│       ├── model/
-│       ├── parse/
-│       ├── aggregation/
-│       ├── net/
-│       ├── output/
-│       ├── runtime/
-│       └── util/
+│       └── config/
+│           └── ConfigLoader.cpp
 ├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── data/
+│   └── unit/
+│       └── ConfigLoaderTest.cpp
 ├── docs/
-└── service/
+│   └── runtime_pipeline.gv
+├── service/
+│   └── binance-aggregator.service
+└── dist/
+    └── docker/          (generated: binary exported from Docker)
 ```
+
+New component directories (model, parse, aggregation, net, output, runtime, util) will be added under `app/include/agg/` and `app/src/` as the corresponding logic is implemented.
+
+## Targets
+
+The build defines two main targets:
+
+```text
+agg_core             static library with application logic (currently config loading)
+binance_aggregator   executable entry point
+unit_tests           GoogleTest unit tests (when BUILD_TESTING=ON)
+```
+
+The executable links `agg_core` together with Boost, OpenSSL, fmt, and spdlog.
 
 ## Dependencies
 
@@ -146,10 +155,9 @@ A 24/7 service needs logs for:
 
 Used for unit testing.
 
-The project will include tests for:
+Current tests cover config loading. The project will also include tests for:
 
 ```text
-- config loading
 - trade parsing
 - aggregation logic
 - output formatting
@@ -170,7 +178,7 @@ CMake defines the project targets.
 
 Conan resolves and installs third-party C++ dependencies.
 
-Docker provides a clean Linux build/test/runtime environment.
+Docker provides a clean Linux build/test environment and produces the exported binary.
 
 ## Conan and CMake Flow
 
@@ -213,7 +221,7 @@ Current example:
     "ETHUSDT"
   ],
   "window_ms": 1000,
-  "flush_interval_ms": 5000,
+  "flush_interval_ms": 1000,
   "output_file": "market_stats.log",
   "ws_host": "stream.binance.com",
   "ws_port": "9443",
@@ -224,6 +232,21 @@ Current example:
   }
 }
 ```
+
+## Config Loading and Validation
+
+Configuration is loaded by `agg::config::ConfigLoader::load_from_file()`.
+
+The loader validates the file and throws descriptive errors instead of starting with a broken configuration:
+
+```text
+- all required fields must be present
+- symbols must be a non-empty array of non-empty alphanumeric strings
+- symbols are normalized to uppercase (btcusdt → BTCUSDT)
+- numeric fields must be positive unsigned integers
+```
+
+Config loading is covered by unit tests in `tests/unit/ConfigLoaderTest.cpp`.
 
 ## Config Fields
 
@@ -263,10 +286,10 @@ How often the service writes completed statistics to file using local hardware t
 Example:
 
 ```json
-"flush_interval_ms": 5000
+"flush_interval_ms": 1000
 ```
 
-This means the service writes completed windows every 5 seconds.
+This means the service writes completed windows every second.
 
 ### output_file
 
@@ -411,28 +434,22 @@ symbol=ETHUSDT trades=231 volume=112.7 min=2289.2 max=2301.8 buy=120 sell=111
 
 Symbols without trades in a window will be skipped.
 
-## Docker Build
+## Docker Flow
 
-Docker is responsible for:
+The Dockerfile has two stages:
 
 ```text
-1. Installing build tools
-2. Installing Conan
-3. Configuring the project with CMake
-4. Building the application
-5. Running unit tests
-6. Installing the binary
-7. Creating a runtime image
+test       Ubuntu 24.04: install build tools and Conan, configure with CMake,
+           build, run unit tests, and install to /install
+artifact   scratch image containing only the installed files from the test stage
 ```
 
-Docker is used both for build verification and for creating a runnable image.
+There is no runtime image. Docker is used for build verification and for exporting the built binary back to the host.
 
-## Build and Test Inside Docker
-
-Build and test only the build stage:
+### Build and test inside Docker
 
 ```text
-docker build --target build --build-arg BUILD_TYPE=Release -t binance_aggregator_build:Release .
+docker build --target test --build-arg BUILD_TYPE=Release -t binance_aggregator_test:Release .
 ```
 
 This checks:
@@ -441,25 +458,26 @@ This checks:
 - CMake configure
 - Conan dependency installation
 - C++ build
-- Unit tests
+- Unit tests (ctest, verbose)
 - CMake install step
 ```
 
-Build the final runtime image:
+### Export the Docker-built binary
 
 ```text
-docker build --build-arg BUILD_TYPE=Release -t binance_aggregator:Release .
+docker build --target artifact --build-arg BUILD_TYPE=Release --output type=local,dest=dist/docker .
 ```
 
-Run the final image:
+This writes the installed layout to the host:
 
 ```text
-docker run --rm binance_aggregator:Release
+dist/docker/bin/binance_aggregator
+dist/docker/etc/binance-aggregator/config.json
 ```
 
 ## Docker Targets Through CMake
 
-The project can also expose Docker commands through CMake targets.
+The Docker commands are also exposed as CMake targets (added only when the `docker` executable is found).
 
 Configure the wrapper build directory:
 
@@ -467,22 +485,16 @@ Configure the wrapper build directory:
 cmake -S . -B build-docker -DCMAKE_BUILD_TYPE=Release
 ```
 
-Run Docker build and tests:
+Build and run tests inside Docker:
 
 ```text
-cmake --build build-docker --target docker_build_test
+cmake --build build-docker --target docker_test
 ```
 
-Build the final Docker runtime image:
+Build, test, and export the binary to `dist/docker` (the directory is cleaned first):
 
 ```text
-cmake --build build-docker --target docker_image
-```
-
-Run the Docker image:
-
-```text
-cmake --build build-docker --target docker_run
+cmake --build build-docker --target docker_export_binary
 ```
 
 These CMake targets are wrappers around Docker commands. The application itself is built inside Docker.
@@ -545,10 +557,10 @@ Host installed binary:
 dist/local/bin/binance_aggregator
 ```
 
-Docker runtime binary:
+Docker-exported binary:
 
 ```text
-/opt/binance-aggregator/bin/binance_aggregator
+dist/docker/bin/binance_aggregator
 ```
 
 ## Current Validation Commands
@@ -556,13 +568,13 @@ Docker runtime binary:
 Recommended Docker validation:
 
 ```text
-docker build --target build --build-arg BUILD_TYPE=Release -t binance_aggregator_build:Release .
+docker build --target test --build-arg BUILD_TYPE=Release -t binance_aggregator_test:Release .
 ```
 
-Recommended final Docker image build:
+Recommended Docker binary export:
 
 ```text
-docker build --build-arg BUILD_TYPE=Release -t binance_aggregator:Release .
+docker build --target artifact --build-arg BUILD_TYPE=Release --output type=local,dest=dist/docker .
 ```
 
 Recommended host validation:
@@ -584,7 +596,7 @@ Planned next steps:
 3. Binance trade JSON parser
 4. Window aggregator
 5. Stats writer
-6. Runtime application
+6. Runtime application (wire config loading into main)
 7. Binance WebSocket client
 8. Reconnect and failure handling
 9. Integration tests
