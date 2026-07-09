@@ -50,6 +50,17 @@ RUN --mount=type=cache,target=/root/.conan2,sharing=locked \
     cmake --install build --prefix /install
 
 FROM ubuntu:24.04 AS runtime
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ca-certificates provides the trust store OpenSSL needs to verify
+# Binance's TLS certificate; without it every WebSocket connection fails
+# the TLS handshake.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --shell /bin/bash aggregator
 
 # This install tree was built inside the Docker build stage above. No local
@@ -61,6 +72,7 @@ USER aggregator
 WORKDIR /home/aggregator
 
 ENTRYPOINT ["binance_aggregator"]
+CMD ["--config", "/opt/binance-aggregator/etc/binance-aggregator/config.json"]
 
 LABEL org.opencontainers.image.title="Binance Aggregator"
 LABEL org.opencontainers.image.description="C++20 service that aggregates Binance public trade data"

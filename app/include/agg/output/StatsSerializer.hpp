@@ -10,7 +10,7 @@ namespace agg::output {
 ///
 ///   timestamp=2026-01-12T14:23:20Z
 ///   symbol=BTCUSDT trades=154 volume=23.51 min=43012.1 max=43189.4 buy=82 sell=72
-///   <blank line>
+///   (blank line)
 ///
 /// The timestamp reflects the exchange-time window start (UTC, ISO-8601),
 /// not the time the snapshot happens to be written. A trailing blank line

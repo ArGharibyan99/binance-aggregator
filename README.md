@@ -369,9 +369,34 @@ build/documentation/graphviz/runtime_pipeline.svg
 build/documentation/graphviz/object_dependencies.svg
 ```
 
+View them by opening those paths directly in a browser:
+
+```bash
+xdg-open build/documentation/doxygen/html/index.html
+xdg-open build/documentation/graphviz/runtime_pipeline.svg
+xdg-open build/documentation/graphviz/object_dependencies.svg
+```
+
+### Without Doxygen/Graphviz installed locally
+
 The Docker `build` stage always has both tools installed and always generates
 + verifies these three files, so a plain `docker build` doubles as a
-documentation-generation check.
+documentation-generation check. If you don't want to install Doxygen/Graphviz
+on the host, extract the generated docs from that stage instead:
+
+```bash
+docker build --target build --build-arg BUILD_TYPE=Release -t binance_aggregator:build-stage .
+
+docker create --name docs_extract binance_aggregator:build-stage
+docker cp docs_extract:/src/build/documentation ./build/documentation
+docker rm -f docs_extract
+docker rmi binance_aggregator:build-stage
+
+xdg-open build/documentation/doxygen/html/index.html
+```
+
+This places the files at the exact same paths a local `-DBUILD_DOCS=ON` build
+would have used (`build/` is already git-ignored).
 
 ## Dependencies
 
