@@ -78,7 +78,8 @@ TEST(MarketDataPipelineIntegrationTest, ProcessesFixtureMessagesIntoExpectedOutp
     EXPECT_EQ(read_file(output_path),
         "timestamp=1970-01-01T00:00:01Z\n"
         "symbol=BTCUSDT trades=2 volume=320 min=100 max=110 buy=1 sell=1\n"
-        "symbol=ETHUSDT trades=1 volume=50 min=10 max=10 buy=1 sell=0\n");
+        "symbol=ETHUSDT trades=1 volume=50 min=10 max=10 buy=1 sell=0\n"
+        "\n");
 
     std::filesystem::remove(output_path);
 }
@@ -208,7 +209,8 @@ TEST(MarketDataPipelineIntegrationTest, SingleSymbolTradesNeverSplitAcrossShards
 
     EXPECT_EQ(read_file(output_path),
         "timestamp=1970-01-01T00:00:01Z\n"
-        "symbol=BTCUSDT trades=20 volume=2000 min=100 max=100 buy=10 sell=10\n");
+        "symbol=BTCUSDT trades=20 volume=2000 min=100 max=100 buy=10 sell=10\n"
+        "\n");
 
     std::filesystem::remove(output_path);
 }

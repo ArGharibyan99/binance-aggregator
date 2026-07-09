@@ -7,6 +7,7 @@
 #include <agg/runtime/MarketDataPipeline.hpp>
 #include <agg/runtime/NetworkStage.hpp>
 
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
 #include <atomic>
@@ -91,7 +92,12 @@ constexpr std::size_t kQueueCapacity = 4096;
 
 int main(int argc, char** argv)
 {
-    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+    // stdout_color_mt colorizes by log level (green info, yellow warn, red
+    // error, ...) and automatically detects whether stdout is a real
+    // terminal, falling back to plain text when redirected to a file or
+    // piped, so this never leaks ANSI escape codes into redirected output.
+    spdlog::set_default_logger(spdlog::stdout_color_mt("binance_aggregator"));
+    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] %^[%l]%$ %v");
 
     spdlog::info("Binance Aggregator service starting");
 

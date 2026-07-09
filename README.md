@@ -1,28 +1,68 @@
 # Binance Aggregator
 
-C++20 Linux service that connects to Binance's public WebSocket market data stream, aggregates real-time trading statistics per symbol over fixed exchange-time windows, and writes them to a file on a fixed local-time interval.
-
-## Current Status
-
-The full pipeline described below is implemented and wired together in `main.cpp`: it connects to live Binance, parses trades, aggregates them into windows, and writes formatted output, with reconnect-with-backoff and graceful shutdown.
+A C++20 Linux service that connects to Binance's public WebSocket market-data
+stream, aggregates real-time trading statistics per symbol over fixed
+exchange-time windows, and writes them to a file on a fixed local-time
+interval — with automatic reconnect, multi-threaded aggregation, and graceful
+shutdown.
 
 ```text
-- CMake build system with automatic Conan dependency bootstrap
-- Fixed-point Decimal type and TradeEvent model (no floating point for prices/volume)
-- Binance trade JSON parser (raw and combined-stream messages)
-- Exchange-time window aggregation (MarketDataAggregator)
-- Statistics serialization and file output (StatsSerializer, FileOutputSink)
-- Configuration loading and validation (ConfigLoader), wired into main.cpp via a --config flag
-- Bounded, shutdown-aware blocking queues used between pipeline stages
-- Offline processing pipeline (parser -> aggregation -> writer stages)
-- Binance WebSocket client (Boost.Beast/Asio + TLS)
-- Reconnect policy: exponential backoff with jitter, based on config
-- Graceful shutdown on SIGINT/SIGTERM, plus a systemd unit for deployment
-- Generated Doxygen documentation and Graphviz architecture diagrams
-- Unit and integration test suites (GoogleTest)
-- Docker multi-stage build (base/deps/build/runtime) with layer-cached Conan deps
-- Docker distributable image bundle (dist/docker)
+timestamp=2026-01-12T14:23:20Z
+symbol=BTCUSDT trades=154 volume=23.51 min=43012.1 max=43189.4 buy=82 sell=72
+symbol=ETHUSDT trades=231 volume=112.7 min=2289.2 max=2301.8 buy=120 sell=111
 ```
+
+## Quick Start
+
+```bash
+# 1. Configure + build (Conan dependencies are bootstrapped automatically)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+
+# 2. Run the tests
+ctest --test-dir build --output-on-failure
+
+# 3. Run the service against live Binance
+./build/binance_aggregator --config config/config.json
+
+# 4. In another terminal, watch the output live, colorized
+./scripts/watch_stats.sh
+```
+
+Prefer Docker? See [Docker](#docker).
+
+## Table of Contents
+
+- [Features](#features)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Multi-Threaded Aggregation (Sharding)](#multi-threaded-aggregation-sharding)
+- [Output Format](#output-format)
+- [Logging](#logging)
+- [Build, Test, Run](#build-test-run)
+- [Docker](#docker)
+- [Systemd Deployment](#systemd-deployment)
+- [Documentation Generation](#documentation-generation)
+- [Dependencies](#dependencies)
+- [Testing Strategy](#testing-strategy)
+
+## Features
+
+| Area | What it does |
+|---|---|
+| **Live data** | Connects to Binance's combined-stream WebSocket over TLS (Boost.Beast/Asio) and subscribes to configured symbols |
+| **Parsing** | Handles both raw and combined-stream trade messages; silently drops malformed/unsupported messages without disrupting the service |
+| **Aggregation** | Buckets trades into fixed exchange-time windows (count, volume, min/max price, buy/sell split); optionally sharded across multiple threads by symbol |
+| **Precision** | Prices, quantities, and volume use a fixed-point `Decimal` type — never `double` — so no floating-point drift across millions of trades |
+| **Output** | Deterministic, human-readable text file, one block per flush, sorted by symbol, blank-line separated |
+| **Resilience** | Reconnects with exponential backoff + jitter on any connection failure (classified: DNS, TCP, TLS, WebSocket handshake, read, timeout, disconnect) |
+| **Shutdown** | `SIGINT`/`SIGTERM` triggers an ordered, lossless shutdown: stop network → drain queues → final flush → exit |
+| **Logging** | Color-coded console logs (green/yellow/red by level) that auto-detect real terminals vs. redirected output |
+| **Viewing** | `scripts/watch_stats.sh` colorizes the output file live, without touching the plain-text file itself |
+| **Deployment** | Docker multi-stage build (with docs generation + verification baked into `docker build`), or a systemd unit for bare-metal |
+| **Docs** | Doxygen API reference + Graphviz architecture diagrams, generated on demand, never required for a normal build |
+| **Testing** | Unit + integration tests (GoogleTest); network tests never require live Binance access |
 
 ## Project Structure
 
@@ -32,18 +72,13 @@ binance-aggregator/
 ├── conanfile.txt
 ├── Dockerfile
 ├── README.md
-├── LICENSE
-├── .dockerignore
-├── .gitignore
-├── cmake/
-│   ├── conan.cmake
-│   ├── docker.cmake
-│   └── documentation.cmake
 ├── config/
 │   └── config.json
+├── scripts/
+│   └── watch_stats.sh          colorized live viewer for the output file
 ├── app/
-│   ├── main.cpp
-│   └── include/agg/ and src/ (mirrored layout), covering:
+│   ├── main.cpp                 wires everything together, signal handling
+│   └── include/agg/ + src/ (mirrored layout):
 │       ├── config/       Config, ConfigLoader
 │       ├── util/         Decimal (fixed-point price/quantity/volume)
 │       ├── model/        TradeEvent
@@ -53,262 +88,25 @@ binance-aggregator/
 │       ├── net/          ConnectionError, BinanceWebSocketClient, ReconnectPolicy
 │       └── runtime/      CliOptions, BoundedQueue, MarketDataPipeline, NetworkStage
 ├── tests/
-│   ├── unit/          one test file per component, e.g. DecimalTest.cpp
-│   └── integration/   MarketDataPipelineIntegrationTest.cpp,
-│                       BinanceWebSocketClientIntegrationTest.cpp,
-│                       NetworkStageIntegrationTest.cpp
-├── docs/
-│   ├── Doxyfile.in
-│   ├── runtime_pipeline.gv
-│   └── object_dependencies.gv
+│   ├── unit/          one test file per component
+│   └── integration/   full-pipeline + network-failure/reconnect/sharding tests
+├── docs/              Doxyfile.in, runtime_pipeline.gv, object_dependencies.gv
 ├── service/
 │   └── binance-aggregator.service
-└── dist/
-    └── docker/          (generated: distributable Docker image tarball)
+├── cmake/             conan.cmake, docker.cmake, documentation.cmake
+└── dist/docker/       (generated) distributable Docker image tarball
 ```
-
-## Architecture
-
-### Runtime pipeline and thread ownership
-
-```text
-Binance WebSocket
-    ↓
-Network thread (NetworkStage: BinanceWebSocketClient + ReconnectPolicy)
-    ↓ raw message queue (BoundedQueue<string>)
-Parser thread (BinanceTradeParser)
-    ↓ trade event queue (BoundedQueue<TradeEvent>)
-Aggregation thread (MarketDataAggregator)
-    ↓ (shared aggregator, guarded by a mutex)
-Writer thread (StatsSerializer + OutputSink, woken by a local steady-clock timer)
-    ↓
-Output file
-```
-
-A rendered version of this diagram is available via the `docs` target (see Documentation Generation below).
-
-Four threads run concurrently, each owned by one of two orchestrating classes:
-
-```text
-NetworkStage          owns the network thread: runs BinanceWebSocketClient::run() in a loop,
-                       retrying via ReconnectPolicy on failure, until stop().
-MarketDataPipeline     owns the parser, aggregation, and writer threads: parser pops raw
-                       messages and pushes parsed trades; aggregation pops trades into the
-                       shared MarketDataAggregator; writer wakes on flush_interval_ms and
-                       extracts/serializes/writes completed windows.
-```
-
-The aggregator is the only object shared between two threads (aggregation writes to it, the
-writer reads/extracts from it); access is serialized by a single mutex inside
-`MarketDataPipeline`. Everything else communicates only through the bounded queues.
-
-### Clock separation
-
-The service deliberately uses two independent clocks:
-
-```text
-Exchange timestamp   decides which aggregation window a trade belongs to.
-                     window_start_ms = trade_time_ms - trade_time_ms % window_ms
-
-Local/hardware time  decides when the writer thread wakes up to flush completed
-                     windows to disk (flush_interval_ms), via a steady-clock-based
-                     condition_variable wait — unaffected by system clock adjustments.
-```
-
-These are independent settings: `window_ms` controls how trades are bucketed by
-exchange time, `flush_interval_ms` controls how often the writer wakes up by local
-time. For example, `window_ms=1000` with `flush_interval_ms=5000` aggregates trades
-into 1-second exchange-time windows but only writes them to disk every 5 real
-seconds; several completed windows can be written together in one flush. The
-`timestamp=` field in the output always reflects the exchange-time window start,
-never the local write time.
-
-### Late-trade behavior
-
-At the aggregator level, a trade whose window was already flushed (extracted)
-starts a fresh bucket for that window rather than being merged back into the
-already-written stats — that bucket would appear as a second, partial window on
-the next flush. This is an intentionally simple policy, exercised by
-`MarketDataAggregatorTest.LateTradeAfterExtractionStartsFreshWindow`.
-
-In practice this is avoided for the periodic flush: the writer thread's periodic
-tick withholds whatever window is still "current" by wall clock
-(`MarketDataAggregator::extract_completed_windows`), only extracting windows
-strictly older than the one presently in progress. This means a window is never
-flushed while it could still receive more trades under normal message delay, so
-a `timestamp=` line is not duplicated in ordinary operation. The one exception is
-the final flush performed on shutdown (`stop()`), which is unconditional — it
-extracts every remaining window, including the current one, since no further
-trades can arrive after that point.
-
-### Failure handling
-
-```text
-WebSocket connection failures   Classified into one of: DNS failure, TCP connect
-                                 failure, TLS handshake failure, WebSocket handshake
-                                 failure, read failure, timeout, or server disconnect
-                                 (agg::net::ConnectionErrorKind). Logged by main.cpp.
-
-Reconnect                       NetworkStage retries with exponential backoff
-                                 (ReconnectPolicy): delay doubles from
-                                 initial_backoff_ms up to max_backoff_ms, randomized
-                                 by jitter_ratio. The backoff resets once a
-                                 connection gets far enough to read at least one
-                                 message, so a later drop of a healthy connection
-                                 does not inherit an escalated delay.
-
-Malformed market messages       BinanceTradeParser returns std::nullopt for
-                                 malformed JSON, missing/invalid fields, or
-                                 unsupported event types. These are silently
-                                 dropped; a single bad message never disrupts the
-                                 pipeline.
-
-Graceful shutdown                SIGINT/SIGTERM set an atomic flag (signal-safe:
-                                 only a lock-free store happens in the handler).
-                                 main.cpp then stops the network stage first
-                                 (closing the connection, halting reconnect), then
-                                 the pipeline (draining anything already queued and
-                                 performing a final flush), before exiting.
-```
-
-## Targets
-
-```text
-agg_core             static library with all application logic
-binance_aggregator    executable entry point
-unit_tests            GoogleTest unit tests (when BUILD_TESTING=ON)
-integration_tests     GoogleTest integration tests, e.g. the full offline pipeline
-                      and network-failure/reconnect behavior (when BUILD_TESTING=ON)
-```
-
-The executable links `agg_core` together with Boost, OpenSSL, fmt, and spdlog.
-
-## Dependencies
-
-Dependencies are managed with Conan 2.x.
-
-Current dependencies:
-
-```text
-boost/1.85.0
-openssl/3.3.1
-nlohmann_json/3.11.3
-fmt/10.2.1
-spdlog/1.14.1
-gtest/1.14.0
-```
-
-## Why These Libraries Are Used
-
-### Boost
-
-Boost.Asio and Boost.Beast implement the Binance WebSocket client
-(`agg::net::BinanceWebSocketClient`): TLS handshake (with SNI), WebSocket
-handshake, and the synchronous read loop that feeds raw messages into the
-pipeline.
-
-### OpenSSL
-
-Required because Binance WebSocket uses secure WebSocket connections:
-
-```text
-wss://stream.binance.com:9443
-```
-
-`wss://` means WebSocket over TLS.
-
-### nlohmann_json
-
-Used for:
-
-```text
-- reading config/config.json
-- parsing Binance JSON trade messages (BinanceTradeParser)
-```
-
-Using one JSON library for both config and market data messages keeps the project simple.
-
-### fmt
-
-Used for clean string formatting, including spdlog's own formatting of log lines like:
-
-```text
-symbol=BTCUSDT trades=154 volume=23.51 min=43012.1 max=43189.4 buy=82 sell=72
-```
-
-### spdlog
-
-Used for service logging: startup, configuration errors, connection attempts,
-reconnects, malformed messages, file write errors, and shutdown.
-
-### GTest
-
-Used for unit and integration testing. Coverage includes decimal arithmetic,
-trade parsing, window aggregation, statistics serialization, bounded queues,
-WebSocket connection-failure classification and reconnect backoff, the full
-offline processing pipeline, and network-stage retry/stop behavior. Network
-tests never require live Binance access (they use loopback connections that
-fail immediately, or pure logic with synthetic error codes); a live connection
-is manually runnable but not required by the automated suite.
-
-## Build System
-
-The project uses:
-
-```text
-CMake
-Conan
-Docker
-```
-
-CMake defines the project targets.
-
-Conan resolves and installs third-party C++ dependencies.
-
-Docker provides a clean Linux build/test environment and produces the runnable service image.
-
-## Conan and CMake Flow
-
-The project uses automatic Conan bootstrap from CMake.
-
-The flow is:
-
-```text
-CMake configure starts
-    ↓
-cmake/conan.cmake runs
-    ↓
-Conan profile is checked/detected
-    ↓
-Conan installs dependencies
-    ↓
-Conan generates CMake package files
-    ↓
-CMake find_package() finds dependencies
-    ↓
-Project builds normally
-```
-
-This means the developer usually does not need to run `conan install` manually.
 
 ## Configuration
 
-The runtime configuration is located at:
-
-```text
-config/config.json
-```
-
-Current example:
+Edit `config/config.json`:
 
 ```json
 {
-  "symbols": [
-    "BTCUSDT",
-    "ETHUSDT"
-  ],
+  "symbols": ["BTCUSDT", "ETHUSDT"],
   "window_ms": 1000,
   "flush_interval_ms": 1000,
+  "aggregator_threads": 1,
   "output_file": "market_stats.log",
   "ws_host": "stream.binance.com",
   "ws_port": "9443",
@@ -320,248 +118,250 @@ Current example:
 }
 ```
 
-Pass a config file path with `--config <path>` (defaults to `config/config.json`).
+Pass a different path with `--config <path>` (defaults to `config/config.json`).
 
-## Config Loading and Validation
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `symbols` | yes | — | Trading pairs to subscribe to, e.g. `["BTCUSDT","ETHUSDT"]`. Normalized to uppercase; converted to lowercase Binance stream names internally (`btcusdt@trade`). |
+| `window_ms` | yes | — | Aggregation window size in **exchange time**, milliseconds. |
+| `flush_interval_ms` | yes | — | How often (in **local/wall-clock time**) the writer thread flushes completed windows to disk. |
+| `aggregator_threads` | no | `1` | Number of independent aggregation shards/threads. See [Multi-Threaded Aggregation](#multi-threaded-aggregation-sharding). |
+| `output_file` | yes | — | Path the output is appended to. |
+| `ws_host` / `ws_port` | yes | — | Binance WebSocket host/port, e.g. `stream.binance.com` / `9443`. |
+| `reconnect.initial_backoff_ms` | no | `500` | First reconnect delay after a connection failure. |
+| `reconnect.max_backoff_ms` | no | `30000` | Reconnect delay cap (backoff doubles up to this). |
+| `reconnect.jitter_ratio` | no | `0.2` | Randomizes each backoff delay by ±this fraction, to avoid thundering-herd reconnects. |
 
-Configuration is loaded by `agg::config::ConfigLoader::load_from_file()`.
+Validation (`ConfigLoader`) throws a descriptive error and refuses to start rather
+than run with a broken config: missing/empty required fields, non-positive
+numeric fields, non-alphanumeric symbols, or `initial_backoff_ms > max_backoff_ms`.
 
-The loader validates the file and throws descriptive errors instead of starting with a broken configuration:
-
-```text
-- all required fields must be present
-- symbols must be a non-empty array of non-empty alphanumeric strings
-- symbols are normalized to uppercase (btcusdt → BTCUSDT)
-- numeric fields must be positive unsigned integers
-- reconnect.initial_backoff_ms must not exceed reconnect.max_backoff_ms
-```
-
-Config loading is covered by unit tests in `tests/unit/ConfigLoaderTest.cpp`.
-
-## Config Fields
-
-### symbols
-
-List of trading pairs to subscribe to. Converted to lowercase Binance combined-stream
-names by `agg::net::build_combined_stream_target`, e.g. `["BTCUSDT", "ETHUSDT"]` becomes:
+## Architecture
 
 ```text
-/stream?streams=btcusdt@trade/ethusdt@trade
+Binance WebSocket
+    │
+    ▼
+Network thread (NetworkStage: BinanceWebSocketClient + ReconnectPolicy)
+    │  raw message queue (BoundedQueue<string>)
+    ▼
+Parser thread (BinanceTradeParser)
+    │  routes each trade to a shard by hash(symbol) % aggregator_threads
+    ▼
+Aggregation thread(s) (MarketDataAggregator) — 1 or more, see sharding below
+    │  writer merges all shards' completed windows
+    ▼
+Writer thread (StatsSerializer + OutputSink), woken by a local steady-clock timer
+    │
+    ▼
+Output file
 ```
 
-### window_ms
+A rendered version of this diagram is available via the `docs` target (see
+[Documentation Generation](#documentation-generation)).
 
-Aggregation window size in milliseconds (exchange time). Example: `1000` means trades
-are aggregated into 1-second exchange-time windows.
+**Thread ownership** — two classes own all worker threads:
 
-### flush_interval_ms
+- **`NetworkStage`** owns the network thread: loops `BinanceWebSocketClient::run()`,
+  retrying via `ReconnectPolicy` on failure, until `stop()`.
+- **`MarketDataPipeline`** owns the parser thread, one aggregation thread per
+  shard, and the writer thread.
 
-How often the writer thread wakes up (local/hardware time) to flush completed windows
-to file. Example: `1000` means it wakes up every second.
+**Clock separation** — the service deliberately uses two independent clocks:
 
-### output_file
+- **Exchange timestamp** (the `T` field on each trade) decides which window a
+  trade belongs to: `window_start_ms = trade_time_ms - trade_time_ms % window_ms`.
+- **Local/wall-clock time** decides when the writer wakes up to flush
+  (`flush_interval_ms`), via a steady-clock-based wait — unaffected by system
+  clock adjustments.
 
-Output file path, appended to by `FileOutputSink`.
+  These are independent knobs. `window_ms=1000` with `flush_interval_ms=5000`
+  aggregates 1-second exchange-time windows but only writes every 5 real
+  seconds, bundling several completed windows into one flush. The `timestamp=`
+  field always reflects the exchange-time window start, never the write time.
 
-### ws_host / ws_port
+**Avoiding split windows** — the writer's periodic tick withholds whatever
+window is still "current" by wall clock (`MarketDataAggregator::extract_completed_windows`),
+only flushing windows strictly older than the one presently in progress. This
+means a window is never written while it could still receive more trades under
+normal message delay, so a `timestamp=` block is not duplicated in ordinary
+operation. The one exception is the final flush on shutdown, which is
+unconditional (drains everything, since no further trades can arrive after
+that point).
 
-Binance WebSocket host and TLS port, e.g. `stream.binance.com` / `9443`.
+**Failure handling**:
 
-### reconnect
+| Failure | Handling |
+|---|---|
+| WebSocket connection failure | Classified into DNS / TCP connect / TLS handshake / WebSocket handshake / read / timeout / server disconnect (`ConnectionErrorKind`); logged. |
+| Reconnect | Exponential backoff (`initial_backoff_ms` doubling up to `max_backoff_ms`, randomized by `jitter_ratio`). Resets once a connection successfully reads at least one message, so a later drop of a healthy connection doesn't inherit an escalated delay. |
+| Malformed market message | `BinanceTradeParser` returns "no result" — silently dropped, never crashes the pipeline. |
+| Shutdown (`SIGINT`/`SIGTERM`) | Signal handler only sets an atomic flag (signal-safe). Main thread then stops the network stage first (closing the connection, halting reconnect), then the pipeline (drains everything queued, final flush), then exits. Nothing submitted before shutdown is lost. |
 
-Reconnect backoff settings used by `agg::net::ReconnectPolicy`:
+## Multi-Threaded Aggregation (Sharding)
 
-```json
-"reconnect": {
-  "initial_backoff_ms": 500,
-  "max_backoff_ms": 30000,
-  "jitter_ratio": 0.2
-}
+Aggregation can be split across multiple independent threads via
+`"aggregator_threads"` in `config.json` (default `1`, i.e. single-threaded).
+
+```text
+symbol ──hash(symbol) % aggregator_threads──▶ shard N
 ```
 
-## Example Output
+Each shard is a fully independent `(BoundedQueue<TradeEvent>, mutex,
+MarketDataAggregator)` triple with its own thread. **A given symbol always
+routes to the same shard for the life of the process** — there is no
+cross-shard ordering or reconciliation logic, because aggregation within one
+`(symbol, window)` bucket is commutative and a symbol never splits across
+shards. The writer thread merges completed windows from every shard, sorts
+them by symbol, and serializes — so **output is byte-for-byte identical
+regardless of `aggregator_threads`**; sharding only changes throughput, never
+behavior (`MarketDataPipelineIntegrationTest.ShardedAggregationProducesIdenticalOutputToSingleShard`).
+
+When to increase it: if you subscribe to many symbols and a single aggregation
+thread becomes a bottleneck (rare — aggregation work per trade is trivial: a
+hash-map lookup plus a few `Decimal` operations). For a couple of symbols at
+typical trade volume, `1` is fine.
+
+Verify how many threads are actually running:
+
+```bash
+ps -T -p $(pgrep -f binance_aggregator)
+# or
+cat /proc/$(pgrep -f binance_aggregator)/status | grep Threads
+```
+
+Expected thread count = `3 + aggregator_threads` (network + parser + writer +
+N aggregation threads), plus the idle main thread.
+
+## Output Format
 
 ```text
 timestamp=2026-01-12T14:23:20Z
 symbol=BTCUSDT trades=154 volume=23.51 min=43012.1 max=43189.4 buy=82 sell=72
 symbol=ETHUSDT trades=231 volume=112.7 min=2289.2 max=2301.8 buy=120 sell=111
+
 ```
 
-The timestamp is the exchange-time window start (UTC, ISO-8601). Symbols with no
-trades in a window are skipped entirely — an empty window is never written.
+- `timestamp` is the exchange-time window start (UTC, ISO-8601).
+- Symbols are sorted alphabetically within a block.
+- Symbols with no trades in a window are skipped entirely — an empty window
+  is never written.
+- Each block ends with a **blank line**, separating it from the next one.
+- `volume` is notional value (`sum(price * quantity)`), not raw token quantity.
 
-## Docker Flow
+To watch it live with colors, without modifying the file itself:
 
-The Dockerfile has four stages:
-
-```text
-base       Ubuntu 24.04: install build tools (cmake, ninja, git), Doxygen/Graphviz,
-           and Conan
-deps       Copies conanfile.txt and runs `conan install` (cached, layer-separated
-           from source so dependency downloads are skipped when only source changes)
-build      Copies the full source, configures with CMake, builds, runs unit and
-           integration tests (ctest), generates and verifies Doxygen/Graphviz
-           documentation, and installs to /install
-runtime    Ubuntu 24.04 image containing only the installed files from the build
-           stage, running as a non-root user, with `binance_aggregator` as the
-           ENTRYPOINT
+```bash
+./scripts/watch_stats.sh                 # follow market_stats.log
+./scripts/watch_stats.sh path/to/file    # follow a different file
+./scripts/watch_stats.sh -c path/to/file # print once, no follow
 ```
 
-Building the image runs the full test suite and documentation generation as part
-of the build layer, then produces a runnable service image (docs are not copied
-into the runtime image, which stays lean).
+`timestamp=` lines are bold cyan, `symbol=NAME` is yellow, `buy=N` is green,
+`sell=N` is red. It uses `sed -u` (explicitly unbuffered) rather than `awk`,
+since some `awk` implementations (e.g. `mawk`) buffer internally in a way that
+silently stalls live output in a `tail -f | awk` pipeline.
 
-### Build the image (runs tests and docs generation, produces a runnable image)
+## Logging
+
+Console logs are colorized by level (spdlog `stdout_color_mt`): green `info`,
+yellow `warning`, red `error`. Color is applied automatically only when stdout
+is a real terminal — redirected or piped output (e.g. `> app.log`) stays plain
+text, so log files are never polluted with ANSI escape codes.
+
+## Build, Test, Run
+
+Required host tools: CMake, Conan 2.x, a C++20 compiler, Git, Python/pipx.
+
+```bash
+# Configure (bootstraps Conan dependencies automatically)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build -j
+
+# Run unit + integration tests
+ctest --test-dir build --output-on-failure
+
+# Install locally
+cmake --install build --prefix dist/local
+
+# Run
+./build/binance_aggregator --config config/config.json
+# or the installed copy:
+./dist/local/bin/binance_aggregator --config config/config.json
+```
+
+Binary locations: `build/binance_aggregator` (host build), `dist/local/bin/binance_aggregator`
+(installed), `dist/docker/binance_aggregator-Release.image.tgz` (Docker distributable).
+
+## Docker
+
+Four-stage `Dockerfile`:
 
 ```text
+base       Ubuntu 24.04: build tools, Doxygen/Graphviz, Conan
+deps       Copies conanfile.txt, runs `conan install` (cached, layer-separated
+           from source so dependency downloads survive source-only changes)
+build      Copies full source, builds, runs unit+integration tests, generates
+           and verifies Doxygen/Graphviz docs, installs to /install
+runtime    Lean Ubuntu 24.04 image, non-root user, `binance_aggregator` ENTRYPOINT
+           (docs are not copied into this image)
+```
+
+```bash
+# Build the image (runs the full test suite + doc generation/verification)
 docker build --build-arg BUILD_TYPE=Release -t binance_aggregator:Release .
-```
 
-This checks:
-
-```text
-- CMake configure
-- Conan dependency installation
-- C++ build
-- Unit and integration tests (ctest, verbose)
-- Doxygen HTML docs and Graphviz SVG diagrams generated and verified to exist
-- CMake install step
-```
-
-### Run the built image
-
-```text
+# Run it
 docker run --rm binance_aggregator:Release
 ```
 
-### Export a distributable image tarball
+Docker commands are also exposed as CMake targets (via `cmake/docker.cmake` in
+script mode):
 
-```text
-cmake --build build-docker --target release_docker
-```
-
-This writes a gzipped `docker save` archive of the image to:
-
-```text
-dist/docker/binance_aggregator-Release.image.tgz
-```
-
-## Docker Targets Through CMake
-
-The Docker commands are also exposed as CMake targets. Each target invokes `cmake/docker.cmake` in script mode (`cmake -P`), which performs the actual `docker build` / `docker save` calls.
-
-Configure the wrapper build directory:
-
-```text
+```bash
 cmake -S . -B build-docker -DCMAKE_BUILD_TYPE=Release
-```
-
-Build the image inside Docker:
-
-```text
-cmake --build build-docker --target docker
-```
-
-Build the image and export the distributable tarball to `dist/docker` (the directory is cleaned first):
-
-```text
-cmake --build build-docker --target release_docker
-```
-
-These CMake targets are wrappers around Docker commands. The application itself is built inside Docker.
-
-## Host Build
-
-The project can also be built directly on the host machine.
-
-Required host tools:
-
-```text
-CMake
-Conan 2.x
-C++ compiler
-Git
-Python/pipx
-```
-
-Configure:
-
-```text
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-```
-
-Build:
-
-```text
-cmake --build build -j
-```
-
-Run tests (unit and integration):
-
-```text
-ctest --test-dir build --output-on-failure
-```
-
-Install locally:
-
-```text
-cmake --install build --prefix dist/local
-```
-
-Run installed binary:
-
-```text
-./dist/local/bin/binance_aggregator --config config/config.json
+cmake --build build-docker --target docker           # docker build only
+cmake --build build-docker --target release_docker    # + export dist/docker/*.tgz
 ```
 
 ## Systemd Deployment
 
-`service/binance-aggregator.service` is written for the following layout:
+`service/binance-aggregator.service` follows this layout:
 
 ```text
-/opt/binance-aggregator/bin/binance_aggregator   installed binary (matches the
-                                                  Docker runtime image's layout)
-/etc/binance-aggregator/config.json               host-editable configuration
-/var/lib/binance-aggregator/                      output/state directory, created
-                                                   and managed automatically by
-                                                   systemd's StateDirectory=
+/opt/binance-aggregator/bin/binance_aggregator   installed binary (matches Docker's layout)
+/etc/binance-aggregator/config.json               host-editable config
+/var/lib/binance-aggregator/                      output/state, managed by systemd's StateDirectory=
 ```
 
-Install the binary to `/opt/binance-aggregator` (e.g. `cmake --install build --prefix /opt/binance-aggregator`),
-place a config at `/etc/binance-aggregator/config.json`, create the `binance-aggregator`
-system user/group, then:
-
-```text
+```bash
+cmake --install build --prefix /opt/binance-aggregator
+# place a config at /etc/binance-aggregator/config.json, create the
+# binance-aggregator system user/group, then:
 sudo cp service/binance-aggregator.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now binance-aggregator
 ```
 
-The unit restarts the process on failure (`Restart=on-failure`) as a coarse safety
-net on top of the application's own WebSocket reconnect logic, and applies standard
-sandboxing (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`).
-Sending `SIGTERM` (what `systemctl stop` sends) triggers the same graceful shutdown
-path described above.
+`Restart=on-failure` is a coarse safety net on top of the app's own reconnect
+logic. Standard sandboxing is applied (`NoNewPrivileges`, `ProtectSystem=strict`,
+`ProtectHome`, `PrivateTmp`). `systemctl stop` sends `SIGTERM`, triggering the
+same graceful shutdown described above.
 
 ## Documentation Generation
 
-Doxygen (API reference from header/source comments) and Graphviz (hand-written
-architecture diagrams under `docs/*.gv`) are optional locally: normal application
-and test builds work with neither installed, since the `docs` target is only
-defined when both are found.
+Doxygen (API reference) and Graphviz (the two hand-written `docs/*.gv`
+architecture diagrams) are optional locally — a normal build/test cycle needs
+neither installed.
 
-Generate documentation locally (requires `doxygen` and `graphviz` installed):
-
-```text
+```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_DOCS=ON
-cmake --build build --target docs
+cmake --build build --target docs   # or: doxygen_docs / graphviz_diagrams individually
 ```
 
-This runs both `doxygen_docs` (Doxygen HTML) and `graphviz_diagrams` (renders
-every `docs/*.gv` file to SVG); each can also be built individually via
-`--target doxygen_docs` or `--target graphviz_diagrams`.
-
-Generated output is written under the build directory (not committed to the repo):
+Generated (not committed) output:
 
 ```text
 build/documentation/doxygen/html/index.html
@@ -569,59 +369,41 @@ build/documentation/graphviz/runtime_pipeline.svg
 build/documentation/graphviz/object_dependencies.svg
 ```
 
-The Docker `build` stage always has Doxygen/Graphviz installed and always
-generates and verifies these three files exist before installing, so a plain
-`docker build` doubles as a documentation-generation check.
+The Docker `build` stage always has both tools installed and always generates
++ verifies these three files, so a plain `docker build` doubles as a
+documentation-generation check.
 
-## Binary Locations
+## Dependencies
 
-Host build binary:
+Managed by Conan 2.x:
 
-```text
-build/binance_aggregator
-```
+| Package | Used for |
+|---|---|
+| `boost/1.85.0` | Boost.Asio/Beast — the WebSocket client's TLS + WebSocket handshakes and read loop |
+| `openssl/3.3.1` | TLS for `wss://stream.binance.com:9443` |
+| `nlohmann_json/3.11.3` | Parsing `config.json` and Binance trade messages |
+| `fmt/10.2.1` | String formatting (also used internally by spdlog) |
+| `spdlog/1.14.1` | Service logging, with color support |
+| `gtest/1.14.0` | Unit and integration tests |
 
-Host installed binary:
+## Testing Strategy
 
-```text
-dist/local/bin/binance_aggregator
-```
+Unit tests (`tests/unit/`, one file per component) cover decimal arithmetic,
+trade parsing, window aggregation, statistics serialization, bounded queues,
+config validation, connection-failure classification, and reconnect backoff.
 
-Docker distributable image tarball:
+Integration tests (`tests/integration/`) cover the full offline pipeline
+(fixture messages → exact expected output), sharded-vs-single-shard output
+equivalence, the duplicate-timestamp fix, and network-stage retry/stop
+behavior — using loopback connections that fail immediately, never live
+Binance. A live connection is manually runnable but never required by the
+automated suite.
 
-```text
-dist/docker/binance_aggregator-Release.image.tgz
-```
-
-## Current Validation Commands
-
-Recommended Docker validation (builds, tests, and generates/verifies docs):
-
-```text
-docker build --build-arg BUILD_TYPE=Release -t binance_aggregator:Release .
-```
-
-Recommended Docker distributable export:
-
-```text
-cmake --build build-docker --target release_docker
-```
-
-Recommended host validation:
-
-```text
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+```bash
 ctest --test-dir build --output-on-failure
-cmake --install build --prefix dist/local
 ```
 
-## Notes
-
-All components described above — trade model, parser, aggregator, serializer/output
-sink, configuration wiring, bounded queues, the offline processing pipeline, the
-Binance WebSocket client, reconnect handling, graceful shutdown, and generated
-documentation — are implemented, tested, and wired together in `main.cpp`. The
-service has been manually verified against live Binance: it connects, aggregates
-real trade data, writes correctly formatted output, and shuts down cleanly on
-`SIGTERM`.
+All components described above are implemented, tested, and wired together in
+`main.cpp`, and have been manually verified against live Binance: the service
+connects, aggregates real trade data, writes correctly formatted output, and
+shuts down cleanly on `SIGTERM`.

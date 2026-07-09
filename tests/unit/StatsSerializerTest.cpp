@@ -52,7 +52,8 @@ TEST(StatsSerializerTest, FormatsSingleSymbolDeterministically)
 
     EXPECT_EQ(text,
         "timestamp=2026-01-12T14:23:20Z\n"
-        "symbol=BTCUSDT trades=154 volume=23.51 min=43012.1 max=43189.4 buy=82 sell=72\n");
+        "symbol=BTCUSDT trades=154 volume=23.51 min=43012.1 max=43189.4 buy=82 sell=72\n"
+        "\n");
 }
 
 TEST(StatsSerializerTest, FormatsMultipleSymbolsUnderOneTimestamp)
@@ -69,7 +70,8 @@ TEST(StatsSerializerTest, FormatsMultipleSymbolsUnderOneTimestamp)
     EXPECT_EQ(text,
         "timestamp=2026-01-12T14:23:20Z\n"
         "symbol=BTCUSDT trades=154 volume=23.51 min=43012.1 max=43189.4 buy=82 sell=72\n"
-        "symbol=ETHUSDT trades=231 volume=112.7 min=2289.2 max=2301.8 buy=120 sell=111\n");
+        "symbol=ETHUSDT trades=231 volume=112.7 min=2289.2 max=2301.8 buy=120 sell=111\n"
+        "\n");
 }
 
 TEST(StatsSerializerTest, SkipsEmptyOutputForSnapshotWithNoWindows)
@@ -93,5 +95,6 @@ TEST(StatsSerializerTest, WritesSerializedTextThroughSinkVerbatim)
     ASSERT_EQ(sink.writes.size(), 1U);
     EXPECT_EQ(sink.writes[0],
         "timestamp=2026-01-12T14:23:20Z\n"
-        "symbol=BTCUSDT trades=1 volume=1 min=1 max=1 buy=1 sell=0\n");
+        "symbol=BTCUSDT trades=1 volume=1 min=1 max=1 buy=1 sell=0\n"
+        "\n");
 }

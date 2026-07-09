@@ -40,6 +40,10 @@ std::string StatsSerializer::serialize(const StatsSnapshot& snapshot)
             + "\n";
     }
 
+    // Blank line after the last symbol, separating this block from the
+    // next one written to the same output.
+    output += "\n";
+
     return output;
 }
 
