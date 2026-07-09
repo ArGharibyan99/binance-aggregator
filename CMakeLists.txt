@@ -37,6 +37,7 @@ add_library(agg_core
     app/src/runtime/MarketDataPipeline.cpp
     app/src/net/ConnectionError.cpp
     app/src/net/BinanceWebSocketClient.cpp
+    app/src/net/ReconnectPolicy.cpp
 )
 
 target_include_directories(agg_core
@@ -98,6 +99,7 @@ if(BUILD_TESTING)
         tests/unit/BoundedQueueTest.cpp
         tests/unit/ConnectionErrorTest.cpp
         tests/unit/BinanceStreamTargetTest.cpp
+        tests/unit/ReconnectPolicyTest.cpp
     )
 
     target_link_libraries(unit_tests
