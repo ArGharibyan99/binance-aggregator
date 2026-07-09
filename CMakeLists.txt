@@ -24,6 +24,7 @@ find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(fmt REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(agg_core
     app/src/config/ConfigLoader.cpp
@@ -33,6 +34,7 @@ add_library(agg_core
     app/src/output/StatsSerializer.cpp
     app/src/output/FileOutputSink.cpp
     app/src/runtime/CliOptions.cpp
+    app/src/runtime/MarketDataPipeline.cpp
 )
 
 target_include_directories(agg_core
@@ -43,6 +45,7 @@ target_include_directories(agg_core
 target_link_libraries(agg_core
     PUBLIC
         nlohmann_json::nlohmann_json
+        Threads::Threads
 )
 
 target_compile_options(agg_core
@@ -105,6 +108,25 @@ if(BUILD_TESTING)
 
     include(GoogleTest)
     gtest_discover_tests(unit_tests)
+
+    add_executable(integration_tests
+        tests/integration/MarketDataPipelineIntegrationTest.cpp
+    )
+
+    target_link_libraries(integration_tests
+        PRIVATE
+            agg_core
+            GTest::gtest_main
+    )
+
+    target_compile_options(integration_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    gtest_discover_tests(integration_tests)
 endif()
 
 install(TARGETS binance_aggregator
