@@ -32,6 +32,7 @@ add_library(agg_core
     app/src/aggregation/MarketDataAggregator.cpp
     app/src/output/StatsSerializer.cpp
     app/src/output/FileOutputSink.cpp
+    app/src/runtime/CliOptions.cpp
 )
 
 target_include_directories(agg_core
@@ -85,6 +86,7 @@ if(BUILD_TESTING)
         tests/unit/MarketDataAggregatorTest.cpp
         tests/unit/StatsSerializerTest.cpp
         tests/unit/FileOutputSinkTest.cpp
+        tests/unit/CliOptionsTest.cpp
     )
 
     target_link_libraries(unit_tests
