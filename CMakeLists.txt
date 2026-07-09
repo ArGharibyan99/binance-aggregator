@@ -150,5 +150,8 @@ install(DIRECTORY config/
     FILES_MATCHING PATTERN "*.json"
 )
 
+include(cmake/documentation.cmake)
+binance_aggregator_add_documentation_targets()
+
 include(cmake/docker.cmake)
 binance_aggregator_add_docker_targets()

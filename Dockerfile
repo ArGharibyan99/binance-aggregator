@@ -11,6 +11,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build git \
         ca-certificates pkg-config \
+        doxygen graphviz fontconfig fonts-dejavu-core fonts-liberation \
         python3-pip python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
@@ -38,9 +39,14 @@ COPY . .
 RUN --mount=type=cache,target=/root/.conan2,sharing=locked \
     cmake -S . -B build -GNinja \
           -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-          -DBUILD_TESTING=ON && \
+          -DBUILD_TESTING=ON \
+          -DBUILD_DOCS=ON && \
     cmake --build build -j$(nproc) && \
     ctest --test-dir build --output-on-failure && \
+    cmake --build build --target docs && \
+    test -f build/documentation/doxygen/html/index.html && \
+    test -f build/documentation/graphviz/runtime_pipeline.svg && \
+    test -f build/documentation/graphviz/object_dependencies.svg && \
     cmake --install build --prefix /install
 
 FROM ubuntu:24.04 AS runtime
