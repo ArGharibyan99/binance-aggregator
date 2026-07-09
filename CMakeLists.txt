@@ -30,6 +30,8 @@ add_library(agg_core
     app/src/util/Decimal.cpp
     app/src/parse/BinanceTradeParser.cpp
     app/src/aggregation/MarketDataAggregator.cpp
+    app/src/output/StatsSerializer.cpp
+    app/src/output/FileOutputSink.cpp
 )
 
 target_include_directories(agg_core
@@ -81,6 +83,8 @@ if(BUILD_TESTING)
         tests/unit/TradeEventTest.cpp
         tests/unit/BinanceTradeParserTest.cpp
         tests/unit/MarketDataAggregatorTest.cpp
+        tests/unit/StatsSerializerTest.cpp
+        tests/unit/FileOutputSinkTest.cpp
     )
 
     target_link_libraries(unit_tests
