@@ -54,6 +54,7 @@ TEST(ConfigLoaderTest, LoadsValidConfig)
     EXPECT_EQ(config.symbols[1], "ETHUSDT");
     EXPECT_EQ(config.window_ms, 1000U);
     EXPECT_EQ(config.flush_interval_ms, 2000U);
+    EXPECT_EQ(config.aggregator_threads, 1U);
     EXPECT_EQ(config.output_file, "market_stats.log");
     EXPECT_EQ(config.ws_host, "stream.binance.com");
     EXPECT_EQ(config.ws_port, "9443");
@@ -142,6 +143,53 @@ TEST(ConfigLoaderTest, RejectsZeroWindow)
   "symbols": ["BTCUSDT"],
   "window_ms": 0,
   "flush_interval_ms": 1000,
+  "output_file": "market_stats.log",
+  "ws_host": "stream.binance.com",
+  "ws_port": "9443"
+}
+)json");
+
+    EXPECT_THROW(
+        agg::config::ConfigLoader::load_from_file(path),
+        std::runtime_error
+    );
+
+    std::filesystem::remove(path);
+}
+
+TEST(ConfigLoaderTest, ParsesExplicitAggregatorThreads)
+{
+    const auto path = make_temp_config_path("aggregator_threads");
+
+    write_text_file(path, R"json(
+{
+  "symbols": ["BTCUSDT"],
+  "window_ms": 1000,
+  "flush_interval_ms": 1000,
+  "aggregator_threads": 4,
+  "output_file": "market_stats.log",
+  "ws_host": "stream.binance.com",
+  "ws_port": "9443"
+}
+)json");
+
+    const auto config = agg::config::ConfigLoader::load_from_file(path);
+
+    EXPECT_EQ(config.aggregator_threads, 4U);
+
+    std::filesystem::remove(path);
+}
+
+TEST(ConfigLoaderTest, RejectsZeroAggregatorThreads)
+{
+    const auto path = make_temp_config_path("zero_aggregator_threads");
+
+    write_text_file(path, R"json(
+{
+  "symbols": ["BTCUSDT"],
+  "window_ms": 1000,
+  "flush_interval_ms": 1000,
+  "aggregator_threads": 0,
   "output_file": "market_stats.log",
   "ws_host": "stream.binance.com",
   "ws_port": "9443"

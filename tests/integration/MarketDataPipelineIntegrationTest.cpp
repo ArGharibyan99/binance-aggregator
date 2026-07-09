@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -131,6 +132,83 @@ TEST(MarketDataPipelineIntegrationTest, PeriodicFlushWithholdsCurrentWindowUntil
     pipeline.stop();
 
     EXPECT_FALSE(read_file(output_path).empty());
+
+    std::filesystem::remove(output_path);
+}
+
+// Sharding must be behavior-preserving: the same fixture messages fed
+// through a single-shard pipeline and a multi-shard pipeline must
+// produce byte-for-byte identical output (write_windows() sorts each
+// window's symbols so this holds regardless of which shard a symbol
+// happened to land in).
+TEST(MarketDataPipelineIntegrationTest, ShardedAggregationProducesIdenticalOutputToSingleShard)
+{
+    const std::vector<std::string> messages = {
+        R"json({"e":"trade","s":"BTCUSDT","t":1,"p":"100.0","q":"1.0","T":1200,"m":false})json",
+        R"json({"e":"trade","s":"ETHUSDT","t":1,"p":"10.0","q":"5.0","T":1300,"m":false})json",
+        R"json({"e":"trade","s":"BTCUSDT","t":2,"p":"110.0","q":"2.0","T":1500,"m":true})json",
+        R"json({"e":"trade","s":"BNBUSDT","t":1,"p":"300.0","q":"1.0","T":1250,"m":true})json",
+        R"json({"e":"trade","s":"ETHUSDT","t":2,"p":"11.0","q":"1.0","T":1600,"m":false})json",
+        R"json({"e":"trade","s":"SOLUSDT","t":1,"p":"20.0","q":"4.0","T":1700,"m":false})json",
+    };
+
+    const auto run_pipeline = [&](std::size_t aggregator_threads, const std::string& name) {
+        const auto output_path = make_temp_file_path(name);
+        agg::output::FileOutputSink sink(output_path);
+
+        agg::runtime::MarketDataPipeline pipeline(
+            /*window_ms=*/1000,
+            /*flush_interval_ms=*/60000,
+            /*queue_capacity=*/16,
+            sink,
+            aggregator_threads);
+
+        pipeline.start();
+        for (const auto& message : messages) {
+            EXPECT_TRUE(pipeline.submit_raw_message(message));
+        }
+        pipeline.stop();
+
+        const auto contents = read_file(output_path);
+        std::filesystem::remove(output_path);
+        return contents;
+    };
+
+    const auto single_shard_output = run_pipeline(1, "single_shard");
+    const auto multi_shard_output = run_pipeline(4, "multi_shard");
+
+    EXPECT_FALSE(single_shard_output.empty());
+    EXPECT_EQ(single_shard_output, multi_shard_output);
+}
+
+// A single symbol's trades must always route to the same shard, so they
+// stay together in one WindowStats entry no matter how many shards are
+// configured -- not split into multiple partial entries.
+TEST(MarketDataPipelineIntegrationTest, SingleSymbolTradesNeverSplitAcrossShards)
+{
+    const auto output_path = make_temp_file_path("single_symbol_many_shards");
+    agg::output::FileOutputSink sink(output_path);
+
+    agg::runtime::MarketDataPipeline pipeline(
+        /*window_ms=*/1000,
+        /*flush_interval_ms=*/60000,
+        /*queue_capacity=*/16,
+        sink,
+        /*aggregator_threads=*/8);
+
+    pipeline.start();
+
+    for (int i = 0; i < 20; ++i) {
+        const auto message = "{\"e\":\"trade\",\"s\":\"BTCUSDT\",\"t\":" + std::to_string(i)
+            + ",\"p\":\"100.0\",\"q\":\"1.0\",\"T\":1200,\"m\":" + (i % 2 == 0 ? "true" : "false") + "}";
+        ASSERT_TRUE(pipeline.submit_raw_message(message));
+    }
+
+    pipeline.stop();
+
+    EXPECT_EQ(read_file(output_path),
+        "timestamp=1970-01-01T00:00:01Z\n"
+        "symbol=BTCUSDT trades=20 volume=2000 min=100 max=100 buy=10 sell=10\n");
 
     std::filesystem::remove(output_path);
 }

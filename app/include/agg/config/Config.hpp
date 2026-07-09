@@ -23,6 +23,11 @@ struct Config {
     std::uint64_t window_ms = 1000;
     std::uint64_t flush_interval_ms = 1000;
 
+    /// Number of independent aggregation shards/threads (see
+    /// agg::runtime::MarketDataPipeline). Each symbol always routes to
+    /// the same shard for the life of the process.
+    std::uint64_t aggregator_threads = 1;
+
     std::string output_file;
 
     std::string ws_host = "stream.binance.com";

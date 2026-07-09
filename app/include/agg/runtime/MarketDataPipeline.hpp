@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -14,41 +15,51 @@
 
 namespace agg::runtime {
 
-/// Wires the parser, aggregation, and writer stages together into a
-/// running pipeline, without any real network source: raw messages are
-/// fed in explicitly via submit_raw_message(), e.g. from a fake source
-/// in tests or, later, from the Binance WebSocket client.
+/// Wires the parser, (sharded) aggregation, and writer stages together
+/// into a running pipeline, without any real network source: raw
+/// messages are fed in explicitly via submit_raw_message(), e.g. from a
+/// fake source in tests or, later, from the Binance WebSocket client.
 ///
 /// Stage layout (matches the planned runtime architecture):
-///   submit_raw_message -> raw queue -> parser stage -> trade queue
-///     -> aggregation stage -> aggregator -> writer stage (on a local
-///     steady-clock timer) -> OutputSink
+///   submit_raw_message -> raw queue -> parser stage
+///     -> one of `aggregator_threads` independent (queue, aggregator)
+///        shards, chosen by std::hash<string>{}(symbol) % shard_count,
+///        so a given symbol always routes to the same shard for the
+///        life of the process
+///     -> one aggregation thread per shard
+///     -> writer stage (on a local steady-clock timer), which merges
+///        completed windows extracted from every shard before
+///        serializing -> OutputSink
 ///
-/// The aggregator is shared between the aggregation stage (adds trades)
-/// and the writer stage (extracts completed windows), so access to it is
-/// serialized internally by a mutex.
+/// Sharding is purely a throughput mechanism: aggregation within one
+/// (symbol, window) bucket is commutative, and a symbol never splits
+/// across shards, so there is no cross-shard ordering or reconciliation
+/// to manage -- each shard is an entirely independent single-threaded
+/// aggregator/mutex pair, merged only at flush time.
 class MarketDataPipeline {
 public:
     MarketDataPipeline(
         std::uint64_t window_ms,
         std::uint64_t flush_interval_ms,
         std::size_t queue_capacity,
-        agg::output::OutputSink& sink);
+        agg::output::OutputSink& sink,
+        std::size_t aggregator_threads = 1);
 
     ~MarketDataPipeline();
 
     MarketDataPipeline(const MarketDataPipeline&) = delete;
     MarketDataPipeline& operator=(const MarketDataPipeline&) = delete;
 
-    /// Starts the parser, aggregation, and writer threads.
+    /// Starts the parser thread, one aggregation thread per shard, and
+    /// the writer thread.
     void start();
 
     /// Stops all stages in pipeline order (writer, then parser, then
-    /// aggregation) so that messages already queued get a chance to
-    /// drain through to the aggregator before their threads exit, then
-    /// performs one final flush of anything accumulated since the last
-    /// periodic flush. Safe to call more than once, and safe to call
-    /// even if start() was never called.
+    /// every aggregation shard) so that messages already queued get a
+    /// chance to drain through to their shard's aggregator before
+    /// threads exit, then performs one final flush merging every
+    /// shard's remaining windows. Safe to call more than once, and safe
+    /// to call even if start() was never called.
     void stop();
 
     /// Feeds one raw message string into the pipeline, as if it had
@@ -62,26 +73,27 @@ public:
     BoundedQueue<std::string>& raw_message_queue() noexcept { return raw_queue_; }
 
 private:
+    struct Shard;
+
     void run_parser_stage();
-    void run_aggregation_stage();
+    void run_aggregation_stage(Shard& shard);
     void run_writer_stage();
     void flush_completed_windows();
     void flush_remaining_windows();
     void write_windows(std::vector<agg::aggregation::WindowStats> windows);
+    std::size_t shard_index_for_symbol(const std::string& symbol) const;
 
     std::uint64_t window_ms_;
     std::uint64_t flush_interval_ms_;
 
     BoundedQueue<std::string> raw_queue_;
-    BoundedQueue<agg::model::TradeEvent> trade_queue_;
 
-    std::mutex aggregator_mutex_;
-    agg::aggregation::MarketDataAggregator aggregator_;
+    std::vector<std::unique_ptr<Shard>> shards_;
 
     agg::output::OutputSink& sink_;
 
     std::thread parser_thread_;
-    std::thread aggregation_thread_;
+    std::vector<std::thread> aggregation_threads_;
     std::thread writer_thread_;
 
     std::mutex stop_mutex_;

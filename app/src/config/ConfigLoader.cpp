@@ -107,6 +107,15 @@ std::string parse_required_string(const json& root, const char* field)
     return value;
 }
 
+std::uint64_t parse_aggregator_threads(const json& root)
+{
+    if (!root.contains("aggregator_threads")) {
+        return 1;
+    }
+
+    return parse_positive_u64(root, "aggregator_threads");
+}
+
 ReconnectConfig parse_reconnect_config(const json& root)
 {
     ReconnectConfig reconnect;
@@ -163,6 +172,7 @@ Config parse_config_json(const json& root)
     config.symbols = parse_symbols(root);
     config.window_ms = parse_positive_u64(root, "window_ms");
     config.flush_interval_ms = parse_positive_u64(root, "flush_interval_ms");
+    config.aggregator_threads = parse_aggregator_threads(root);
     config.output_file = parse_required_string(root, "output_file");
     config.ws_host = parse_required_string(root, "ws_host");
     config.ws_port = parse_required_string(root, "ws_port");

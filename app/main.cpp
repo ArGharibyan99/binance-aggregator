@@ -117,6 +117,7 @@ int main(int argc, char** argv)
 
     spdlog::info("Config: symbols=[{}]", join_symbols(config.symbols));
     spdlog::info("Config: window_ms={} flush_interval_ms={}", config.window_ms, config.flush_interval_ms);
+    spdlog::info("Config: aggregator_threads={}", config.aggregator_threads);
     spdlog::info("Config: output_file={}", config.output_file);
     spdlog::info("Config: ws_host={} ws_port={}", config.ws_host, config.ws_port);
     spdlog::info(
@@ -129,7 +130,8 @@ int main(int argc, char** argv)
     std::signal(SIGTERM, handle_shutdown_signal);
 
     agg::output::FileOutputSink sink(config.output_file);
-    agg::runtime::MarketDataPipeline pipeline(config.window_ms, config.flush_interval_ms, kQueueCapacity, sink);
+    agg::runtime::MarketDataPipeline pipeline(
+        config.window_ms, config.flush_interval_ms, kQueueCapacity, sink, config.aggregator_threads);
 
     agg::runtime::NetworkStage network_stage(
         config.ws_host,
