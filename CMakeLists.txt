@@ -87,6 +87,7 @@ if(BUILD_TESTING)
         tests/unit/StatsSerializerTest.cpp
         tests/unit/FileOutputSinkTest.cpp
         tests/unit/CliOptionsTest.cpp
+        tests/unit/BoundedQueueTest.cpp
     )
 
     target_link_libraries(unit_tests
