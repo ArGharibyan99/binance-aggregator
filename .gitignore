@@ -1,4 +1,5 @@
 build/
+build-docker/
 dist/
 cmake-build-*/
 .conan/

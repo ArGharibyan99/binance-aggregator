@@ -17,8 +17,8 @@ Implemented so far:
 - Configuration loading and validation (ConfigLoader)
 - Unit tests with GoogleTest (config loading)
 - Runtime configuration file
-- Docker build/test image support
-- Docker-built binary export support (dist/docker)
+- Docker multi-stage build (base/deps/build/runtime) with layer-cached Conan deps
+- Docker distributable image bundle (dist/docker)
 - Host build instructions
 ```
 
@@ -57,7 +57,7 @@ binance-aggregator/
 ├── service/
 │   └── binance-aggregator.service
 └── dist/
-    └── docker/          (generated: binary exported from Docker)
+    └── docker/          (generated: distributable Docker image tarball)
 ```
 
 New component directories (model, parse, aggregation, net, output, runtime, util) will be added under `app/include/agg/` and `app/src/` as the corresponding logic is implemented.
@@ -436,20 +436,25 @@ Symbols without trades in a window will be skipped.
 
 ## Docker Flow
 
-The Dockerfile has two stages:
+The Dockerfile has four stages:
 
 ```text
-test       Ubuntu 24.04: install build tools and Conan, configure with CMake,
-           build, run unit tests, and install to /install
-artifact   scratch image containing only the installed files from the test stage
+base       Ubuntu 24.04: install build tools (cmake, ninja, git) and Conan
+deps       Copies conanfile.txt and runs `conan install` (cached, layer-separated
+           from source so dependency downloads are skipped when only source changes)
+build      Copies the full source, configures with CMake, builds, runs unit tests
+           (ctest), and installs to /install
+runtime    Ubuntu 24.04 image containing only the installed files from the build
+           stage, running as a non-root user, with `binance_aggregator` as the
+           ENTRYPOINT
 ```
 
-There is no runtime image. Docker is used for build verification and for exporting the built binary back to the host.
+Building the image runs the full test suite as part of the build layer, then produces a runnable service image.
 
-### Build and test inside Docker
+### Build the image (runs tests, produces a runnable image)
 
 ```text
-docker build --target test --build-arg BUILD_TYPE=Release -t binance_aggregator_test:Release .
+docker build --build-arg BUILD_TYPE=Release -t binance_aggregator:Release .
 ```
 
 This checks:
@@ -462,22 +467,27 @@ This checks:
 - CMake install step
 ```
 
-### Export the Docker-built binary
+### Run the built image
 
 ```text
-docker build --target artifact --build-arg BUILD_TYPE=Release --output type=local,dest=dist/docker .
+docker run --rm binance_aggregator:Release
 ```
 
-This writes the installed layout to the host:
+### Export a distributable image tarball
 
 ```text
-dist/docker/bin/binance_aggregator
-dist/docker/etc/binance-aggregator/config.json
+cmake --build build-docker --target release_docker
+```
+
+This writes a gzipped `docker save` archive of the image to:
+
+```text
+dist/docker/binance_aggregator-Release.image.tgz
 ```
 
 ## Docker Targets Through CMake
 
-The Docker commands are also exposed as CMake targets (added only when the `docker` executable is found).
+The Docker commands are also exposed as CMake targets. Each target invokes `cmake/docker.cmake` in script mode (`cmake -P`), which performs the actual `docker build` / `docker save` calls.
 
 Configure the wrapper build directory:
 
@@ -485,16 +495,16 @@ Configure the wrapper build directory:
 cmake -S . -B build-docker -DCMAKE_BUILD_TYPE=Release
 ```
 
-Build and run tests inside Docker:
+Build the image inside Docker:
 
 ```text
-cmake --build build-docker --target docker_test
+cmake --build build-docker --target docker
 ```
 
-Build, test, and export the binary to `dist/docker` (the directory is cleaned first):
+Build the image and export the distributable tarball to `dist/docker` (the directory is cleaned first):
 
 ```text
-cmake --build build-docker --target docker_export_binary
+cmake --build build-docker --target release_docker
 ```
 
 These CMake targets are wrappers around Docker commands. The application itself is built inside Docker.
@@ -557,10 +567,10 @@ Host installed binary:
 dist/local/bin/binance_aggregator
 ```
 
-Docker-exported binary:
+Docker distributable image tarball:
 
 ```text
-dist/docker/bin/binance_aggregator
+dist/docker/binance_aggregator-Release.image.tgz
 ```
 
 ## Current Validation Commands
@@ -568,13 +578,13 @@ dist/docker/bin/binance_aggregator
 Recommended Docker validation:
 
 ```text
-docker build --target test --build-arg BUILD_TYPE=Release -t binance_aggregator_test:Release .
+docker build --build-arg BUILD_TYPE=Release -t binance_aggregator:Release .
 ```
 
-Recommended Docker binary export:
+Recommended Docker distributable export:
 
 ```text
-docker build --target artifact --build-arg BUILD_TYPE=Release --output type=local,dest=dist/docker .
+cmake --build build-docker --target release_docker
 ```
 
 Recommended host validation:
