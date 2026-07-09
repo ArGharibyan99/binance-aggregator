@@ -148,3 +148,50 @@ TEST(MarketDataAggregatorTest, LateTradeAfterExtractionStartsFreshWindow)
     EXPECT_EQ(second_flush[0].trade_count, 1U);
     EXPECT_EQ(second_flush[0].total_volume.to_string(), "200");
 }
+
+TEST(MarketDataAggregatorTest, ExtractCompletedWindowsOnlyReturnsWindowsBeforeWatermark)
+{
+    MarketDataAggregator aggregator(1000);
+
+    aggregator.add_trade(make_trade("BTCUSDT", 1, "100.0", "1.0", 1000, false));
+    aggregator.add_trade(make_trade("BTCUSDT", 2, "100.0", "1.0", 2000, false));
+    aggregator.add_trade(make_trade("BTCUSDT", 3, "100.0", "1.0", 3000, false));
+
+    // Watermark of 3000 means the window starting at 3000 is still "now"
+    // and must be withheld; only 1000 and 2000 are strictly before it.
+    auto completed = aggregator.extract_completed_windows(3000);
+
+    ASSERT_EQ(completed.size(), 2U);
+    EXPECT_EQ(completed[0].window_start_ms, 1000U);
+    EXPECT_EQ(completed[1].window_start_ms, 2000U);
+
+    EXPECT_FALSE(aggregator.window_stats("BTCUSDT", 1000).has_value());
+    EXPECT_FALSE(aggregator.window_stats("BTCUSDT", 2000).has_value());
+    ASSERT_TRUE(aggregator.window_stats("BTCUSDT", 3000).has_value());
+    EXPECT_EQ(aggregator.window_stats("BTCUSDT", 3000)->trade_count, 1U);
+}
+
+TEST(MarketDataAggregatorTest, ExtractCompletedWindowsLeavesCurrentWindowAcrossSymbols)
+{
+    MarketDataAggregator aggregator(1000);
+
+    aggregator.add_trade(make_trade("BTCUSDT", 1, "100.0", "1.0", 1000, false));
+    aggregator.add_trade(make_trade("ETHUSDT", 1, "10.0", "1.0", 2000, false));
+
+    auto completed = aggregator.extract_completed_windows(2000);
+
+    ASSERT_EQ(completed.size(), 1U);
+    EXPECT_EQ(completed[0].symbol, "BTCUSDT");
+
+    ASSERT_TRUE(aggregator.window_stats("ETHUSDT", 2000).has_value());
+}
+
+TEST(MarketDataAggregatorTest, ExtractCompletedWindowsReturnsNothingWhenAllWindowsAreCurrent)
+{
+    MarketDataAggregator aggregator(1000);
+
+    aggregator.add_trade(make_trade("BTCUSDT", 1, "100.0", "1.0", 5000, false));
+
+    EXPECT_TRUE(aggregator.extract_completed_windows(5000).empty());
+    ASSERT_TRUE(aggregator.window_stats("BTCUSDT", 5000).has_value());
+}

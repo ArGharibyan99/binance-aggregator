@@ -40,6 +40,14 @@ public:
     /// symbols, in unspecified order.
     std::vector<WindowStats> extract_all_windows();
 
+    /// Removes and returns every window whose window_start_ms is
+    /// strictly before current_window_start_ms, leaving windows at or
+    /// after it untouched. Used for periodic flushing: by withholding
+    /// the window that is still in progress "now", it is not flushed
+    /// (and thus not split by a subsequent late trade) while it could
+    /// still receive more trades under normal message delay.
+    std::vector<WindowStats> extract_completed_windows(std::uint64_t current_window_start_ms);
+
 private:
     std::uint64_t window_ms_;
     std::map<std::string, std::map<std::uint64_t, WindowStats>> windows_;

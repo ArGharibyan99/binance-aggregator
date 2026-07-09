@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace agg::runtime {
 
@@ -65,7 +66,10 @@ private:
     void run_aggregation_stage();
     void run_writer_stage();
     void flush_completed_windows();
+    void flush_remaining_windows();
+    void write_windows(std::vector<agg::aggregation::WindowStats> windows);
 
+    std::uint64_t window_ms_;
     std::uint64_t flush_interval_ms_;
 
     BoundedQueue<std::string> raw_queue_;

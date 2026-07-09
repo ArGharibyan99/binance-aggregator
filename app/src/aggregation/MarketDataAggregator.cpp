@@ -72,4 +72,30 @@ std::vector<WindowStats> MarketDataAggregator::extract_all_windows()
     return result;
 }
 
+std::vector<WindowStats> MarketDataAggregator::extract_completed_windows(std::uint64_t current_window_start_ms)
+{
+    std::vector<WindowStats> result;
+
+    for (auto symbol_it = windows_.begin(); symbol_it != windows_.end();) {
+        auto& symbol_windows = symbol_it->second;
+
+        for (auto window_it = symbol_windows.begin(); window_it != symbol_windows.end();) {
+            if (window_it->first < current_window_start_ms) {
+                result.push_back(std::move(window_it->second));
+                window_it = symbol_windows.erase(window_it);
+            } else {
+                ++window_it;
+            }
+        }
+
+        if (symbol_windows.empty()) {
+            symbol_it = windows_.erase(symbol_it);
+        } else {
+            ++symbol_it;
+        }
+    }
+
+    return result;
+}
+
 } // namespace agg::aggregation

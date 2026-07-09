@@ -4,10 +4,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -76,6 +78,59 @@ TEST(MarketDataPipelineIntegrationTest, ProcessesFixtureMessagesIntoExpectedOutp
         "timestamp=1970-01-01T00:00:01Z\n"
         "symbol=BTCUSDT trades=2 volume=320 min=100 max=110 buy=1 sell=1\n"
         "symbol=ETHUSDT trades=1 volume=50 min=10 max=10 buy=1 sell=0\n");
+
+    std::filesystem::remove(output_path);
+}
+
+// Demonstrates the fix for the "duplicate timestamp" issue: a trade whose
+// window is still the currently-in-progress one (by wall clock) must not
+// be written out by a periodic flush tick, since a further trade for that
+// same window could still arrive. It should only appear once the pipeline
+// is stopped (the final flush is unconditional, since no more trades can
+// arrive after that).
+TEST(MarketDataPipelineIntegrationTest, PeriodicFlushWithholdsCurrentWindowUntilStop)
+{
+    const auto output_path = make_temp_file_path("withhold");
+    agg::output::FileOutputSink sink(output_path);
+
+    constexpr std::uint64_t kWindowMs = 1000;
+
+    const auto wall_clock_ms = [] {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count());
+    };
+
+    // Align to just past the start of a fresh window, so the trade below
+    // has close to a full window_ms of margin before its window naturally
+    // closes -- otherwise, if the test happened to start near the end of
+    // a second, the window could close for real before the assertions
+    // below run, making the test flaky.
+    const auto ms_into_window = wall_clock_ms() % kWindowMs;
+    std::this_thread::sleep_for(std::chrono::milliseconds((kWindowMs - ms_into_window) + 20));
+
+    const auto trade_time_ms = wall_clock_ms();
+
+    agg::runtime::MarketDataPipeline pipeline(
+        kWindowMs,
+        /*flush_interval_ms=*/50,
+        /*queue_capacity=*/16,
+        sink);
+
+    pipeline.start();
+
+    const auto message = "{\"e\":\"trade\",\"s\":\"BTCUSDT\",\"t\":1,\"p\":\"100.0\",\"q\":\"1.0\",\"T\":"
+        + std::to_string(trade_time_ms) + ",\"m\":false}";
+    ASSERT_TRUE(pipeline.submit_raw_message(message));
+
+    // Let several periodic flush ticks (every 50ms) happen while the
+    // window is still current.
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    EXPECT_TRUE(read_file(output_path).empty());
+
+    pipeline.stop();
+
+    EXPECT_FALSE(read_file(output_path).empty());
 
     std::filesystem::remove(output_path);
 }

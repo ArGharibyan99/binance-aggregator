@@ -16,7 +16,8 @@ MarketDataPipeline::MarketDataPipeline(
     std::uint64_t flush_interval_ms,
     std::size_t queue_capacity,
     agg::output::OutputSink& sink)
-    : flush_interval_ms_(flush_interval_ms)
+    : window_ms_(window_ms)
+    , flush_interval_ms_(flush_interval_ms)
     , raw_queue_(queue_capacity)
     , trade_queue_(queue_capacity)
     , aggregator_(window_ms)
@@ -57,7 +58,7 @@ void MarketDataPipeline::stop()
         aggregation_thread_.join();
     }
 
-    flush_completed_windows();
+    flush_remaining_windows();
 }
 
 bool MarketDataPipeline::submit_raw_message(std::string raw_message)
@@ -97,12 +98,39 @@ void MarketDataPipeline::run_writer_stage()
 
 void MarketDataPipeline::flush_completed_windows()
 {
+    // Withhold the window currently in progress "now" (by wall clock) so
+    // it is not flushed, and thus not split by a late trade, while it
+    // could still receive more trades under normal message delay. This
+    // relies on the host clock being reasonably close to exchange time.
+    const auto now_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    const auto current_window_start_ms = now_ms - (now_ms % window_ms_);
+
+    std::vector<agg::aggregation::WindowStats> windows;
+    {
+        std::lock_guard<std::mutex> lock(aggregator_mutex_);
+        windows = aggregator_.extract_completed_windows(current_window_start_ms);
+    }
+
+    write_windows(std::move(windows));
+}
+
+void MarketDataPipeline::flush_remaining_windows()
+{
+    // Unconditional: called only once, during shutdown, when no further
+    // trades can possibly arrive to split whatever window is still open.
     std::vector<agg::aggregation::WindowStats> windows;
     {
         std::lock_guard<std::mutex> lock(aggregator_mutex_);
         windows = aggregator_.extract_all_windows();
     }
 
+    write_windows(std::move(windows));
+}
+
+void MarketDataPipeline::write_windows(std::vector<agg::aggregation::WindowStats> windows)
+{
     if (windows.empty()) {
         return;
     }

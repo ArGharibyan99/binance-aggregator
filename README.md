@@ -125,11 +125,21 @@ never the local write time.
 
 ### Late-trade behavior
 
-A trade whose window was already flushed (extracted) starts a fresh bucket for that
-window rather than being merged back into the already-written stats. That bucket
-appears as a second, partial window on the next flush. This is an intentionally
-simple policy, exercised by
+At the aggregator level, a trade whose window was already flushed (extracted)
+starts a fresh bucket for that window rather than being merged back into the
+already-written stats — that bucket would appear as a second, partial window on
+the next flush. This is an intentionally simple policy, exercised by
 `MarketDataAggregatorTest.LateTradeAfterExtractionStartsFreshWindow`.
+
+In practice this is avoided for the periodic flush: the writer thread's periodic
+tick withholds whatever window is still "current" by wall clock
+(`MarketDataAggregator::extract_completed_windows`), only extracting windows
+strictly older than the one presently in progress. This means a window is never
+flushed while it could still receive more trades under normal message delay, so
+a `timestamp=` line is not duplicated in ordinary operation. The one exception is
+the final flush performed on shutdown (`stop()`), which is unconditional — it
+extracts every remaining window, including the current one, since no further
+trades can arrive after that point.
 
 ### Failure handling
 
