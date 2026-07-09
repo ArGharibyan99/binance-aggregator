@@ -1,0 +1,23 @@
+digraph runtime_pipeline {
+    rankdir = LR;
+    node [shape=box, style=filled, fillcolor="#f0f0f0", fontname="Helvetica"];
+
+    binance [label="Binance WebSocket", shape=ellipse, fillcolor="#dce6f1"];
+    network_thread [label="WebSocket / network thread\n(NetworkStage + BinanceWebSocketClient)"];
+    raw_queue [label="raw message queue\n(BoundedQueue<string>)", shape=cylinder, fillcolor="#fde9d9"];
+    parser [label="parser stage\n(BinanceTradeParser)"];
+    trade_queue [label="trade event queue\n(BoundedQueue<TradeEvent>)", shape=cylinder, fillcolor="#fde9d9"];
+    aggregation [label="aggregation shard\n(MarketDataAggregator)"];
+    snapshot_queue [label="snapshot / write queue\n(completed WindowStats)", shape=cylinder, fillcolor="#fde9d9"];
+    writer_thread [label="writer thread\n(StatsSerializer + OutputSink)"];
+    output_file [label="output file\n(market_stats.log)", shape=note, fillcolor="#e2efda"];
+
+    binance -> network_thread;
+    network_thread -> raw_queue [label="raw JSON messages"];
+    raw_queue -> parser;
+    parser -> trade_queue [label="TradeEvent"];
+    trade_queue -> aggregation;
+    aggregation -> snapshot_queue [label="on flush interval\n(local steady clock)"];
+    snapshot_queue -> writer_thread;
+    writer_thread -> output_file;
+}

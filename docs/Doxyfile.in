@@ -1,0 +1,19 @@
+PROJECT_NAME           = "@PROJECT_NAME@"
+PROJECT_NUMBER         = @PROJECT_VERSION@
+OUTPUT_DIRECTORY       = @DOXYGEN_OUTPUT_DIR@
+
+INPUT                  = @CMAKE_SOURCE_DIR@/app/include @CMAKE_SOURCE_DIR@/app/src
+RECURSIVE              = YES
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+
+HAVE_DOT               = NO

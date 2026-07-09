@@ -1,0 +1,28 @@
+digraph object_dependencies {
+    rankdir = TB;
+    node [shape=box, style=filled, fillcolor="#f0f0f0", fontname="Helvetica"];
+
+    application [label="Application\n(main.cpp)", fillcolor="#dce6f1"];
+    config [label="ConfigLoader / AppConfig\n(agg::config)"];
+    ws_client [label="BinanceWebSocketClient\n(agg::net)"];
+    reconnect [label="ReconnectPolicy\n(agg::net)"];
+    parser [label="BinanceTradeParser\n(agg::parse)"];
+    aggregator [label="MarketDataAggregator\n(agg::aggregation)"];
+    serializer [label="StatsSerializer\n(agg::output)"];
+    sink [label="OutputSink / FileOutputSink\n(agg::output)"];
+    queue [label="BoundedQueue<T>\n(agg::runtime)", shape=component, fillcolor="#fde9d9"];
+
+    application -> config;
+    application -> ws_client;
+    application -> reconnect;
+    application -> parser;
+    application -> aggregator;
+    application -> serializer;
+    application -> sink;
+    application -> queue;
+
+    ws_client -> queue [label="pushes raw messages"];
+    reconnect -> config [label="ReconnectConfig"];
+    parser -> aggregator [label="TradeEvent"];
+    serializer -> aggregator [label="WindowStats"];
+}

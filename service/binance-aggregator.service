@@ -1,0 +1,23 @@
+[Unit]
+Description=Binance Aggregator - real-time Binance trade statistics aggregator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/binance-aggregator/bin/binance_aggregator --config /etc/binance-aggregator/config.json
+Restart=on-failure
+RestartSec=5
+User=binance-aggregator
+Group=binance-aggregator
+
+WorkingDirectory=/var/lib/binance-aggregator
+StateDirectory=binance-aggregator
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

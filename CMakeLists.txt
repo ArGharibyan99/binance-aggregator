@@ -24,22 +24,54 @@ find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(fmt REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(Threads REQUIRED)
+
+add_library(agg_core
+    app/src/config/ConfigLoader.cpp
+    app/src/util/Decimal.cpp
+    app/src/parse/BinanceTradeParser.cpp
+    app/src/aggregation/MarketDataAggregator.cpp
+    app/src/output/StatsSerializer.cpp
+    app/src/output/FileOutputSink.cpp
+    app/src/runtime/CliOptions.cpp
+    app/src/runtime/MarketDataPipeline.cpp
+    app/src/runtime/NetworkStage.cpp
+    app/src/net/ConnectionError.cpp
+    app/src/net/BinanceWebSocketClient.cpp
+    app/src/net/ReconnectPolicy.cpp
+)
+
+target_include_directories(agg_core
+    PUBLIC
+        app/include
+)
+
+target_link_libraries(agg_core
+    PUBLIC
+        nlohmann_json::nlohmann_json
+        Threads::Threads
+        Boost::headers
+        OpenSSL::SSL
+        OpenSSL::Crypto
+)
+
+target_compile_options(agg_core
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+)
 
 add_executable(binance_aggregator
     app/main.cpp
 )
 
-target_include_directories(binance_aggregator
-    PRIVATE
-        app/include
-)
-
 target_link_libraries(binance_aggregator
     PRIVATE
+        agg_core
         Boost::headers
         OpenSSL::SSL
         OpenSSL::Crypto
-        nlohmann_json::nlohmann_json
         fmt::fmt
         spdlog::spdlog
 )
@@ -57,14 +89,69 @@ if(BUILD_TESTING)
     find_package(GTest REQUIRED)
 
     add_executable(unit_tests
-        tests/unit/DummyTest.cpp
+        tests/unit/ConfigLoaderTest.cpp
+        tests/unit/DecimalTest.cpp
+        tests/unit/TradeEventTest.cpp
+        tests/unit/BinanceTradeParserTest.cpp
+        tests/unit/MarketDataAggregatorTest.cpp
+        tests/unit/StatsSerializerTest.cpp
+        tests/unit/FileOutputSinkTest.cpp
+        tests/unit/CliOptionsTest.cpp
+        tests/unit/BoundedQueueTest.cpp
+        tests/unit/ConnectionErrorTest.cpp
+        tests/unit/BinanceStreamTargetTest.cpp
+        tests/unit/ReconnectPolicyTest.cpp
     )
 
     target_link_libraries(unit_tests
         PRIVATE
+            agg_core
             GTest::gtest_main
+    )
+
+    target_compile_options(unit_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
     )
 
     include(GoogleTest)
     gtest_discover_tests(unit_tests)
+
+    add_executable(integration_tests
+        tests/integration/MarketDataPipelineIntegrationTest.cpp
+        tests/integration/BinanceWebSocketClientIntegrationTest.cpp
+        tests/integration/NetworkStageIntegrationTest.cpp
+    )
+
+    target_link_libraries(integration_tests
+        PRIVATE
+            agg_core
+            GTest::gtest_main
+    )
+
+    target_compile_options(integration_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    gtest_discover_tests(integration_tests)
 endif()
+
+install(TARGETS binance_aggregator
+    RUNTIME DESTINATION bin
+)
+
+install(DIRECTORY config/
+    DESTINATION etc/binance-aggregator
+    FILES_MATCHING PATTERN "*.json"
+)
+
+include(cmake/documentation.cmake)
+binance_aggregator_add_documentation_targets()
+
+include(cmake/docker.cmake)
+binance_aggregator_add_docker_targets()
