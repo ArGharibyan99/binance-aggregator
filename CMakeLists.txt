@@ -27,6 +27,7 @@ find_package(spdlog REQUIRED)
 
 add_library(agg_core
     app/src/config/ConfigLoader.cpp
+    app/src/util/Decimal.cpp
 )
 
 target_include_directories(agg_core
@@ -74,6 +75,8 @@ if(BUILD_TESTING)
 
     add_executable(unit_tests
         tests/unit/ConfigLoaderTest.cpp
+        tests/unit/DecimalTest.cpp
+        tests/unit/TradeEventTest.cpp
     )
 
     target_link_libraries(unit_tests
