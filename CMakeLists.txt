@@ -35,6 +35,7 @@ add_library(agg_core
     app/src/output/FileOutputSink.cpp
     app/src/runtime/CliOptions.cpp
     app/src/runtime/MarketDataPipeline.cpp
+    app/src/runtime/NetworkStage.cpp
     app/src/net/ConnectionError.cpp
     app/src/net/BinanceWebSocketClient.cpp
     app/src/net/ReconnectPolicy.cpp
@@ -121,6 +122,7 @@ if(BUILD_TESTING)
     add_executable(integration_tests
         tests/integration/MarketDataPipelineIntegrationTest.cpp
         tests/integration/BinanceWebSocketClientIntegrationTest.cpp
+        tests/integration/NetworkStageIntegrationTest.cpp
     )
 
     target_link_libraries(integration_tests

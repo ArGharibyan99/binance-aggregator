@@ -55,6 +55,11 @@ public:
     /// queue is full; returns false if the pipeline is shutting down.
     bool submit_raw_message(std::string raw_message);
 
+    /// Direct access to the raw-message queue, so an external message
+    /// source (e.g. NetworkStage) can push into the same queue the
+    /// parser stage reads from without going through submit_raw_message.
+    BoundedQueue<std::string>& raw_message_queue() noexcept { return raw_queue_; }
+
 private:
     void run_parser_stage();
     void run_aggregation_stage();
